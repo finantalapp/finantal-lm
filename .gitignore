@@ -1,0 +1,48 @@
+# ===== Heavy assets — these live on Google Drive, NEVER in Git =====
+# Tokenized datasets / any dataset
+*.jsonl
+data/
+dataset/
+
+# Tokenizer artifacts
+*.model
+*.vocab
+tokenizer/
+
+# Checkpoints / weights
+checkpoints/
+*.pt
+*.bin
+*.safetensors
+*.ckpt
+
+# Logs / metrics
+logs/
+*.log
+runs/
+tb/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+.python-version
+
+# ===== Env / secrets =====
+.env
+*.env
+
+# ===== OS / editor =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,73 @@
+{
+  "seed": 1234,
+  "model_config": "config/model_config.json",
+  "_paths_note": "Data / checkpoint / tokenizer paths are NOT set here. They come from config/paths.py (env-driven, default to Google Drive). Leave the *_path / *_dir / init_from / resume_from fields null to use those defaults; set an absolute path only to override.",
+
+  "pretrain": {
+    "data_path": null,
+    "output_dir": null,
+    "resume_from": null,
+    "auto_resume": true,
+
+    "max_seq_len": 1024,
+    "pack_sequences": true,
+
+    "micro_batch_size": 8,
+    "gradient_accumulation_steps": 16,
+    "num_epochs": 1,
+    "max_steps": 8000,
+    "_steps_note": "Corpus ~97M tokens; ~131K tokens/step at this config => ~740 steps/epoch. 8000 steps ~ 10 effective epochs.",
+
+    "learning_rate": 3e-4,
+    "min_lr": 3e-5,
+    "weight_decay": 0.1,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "eps": 1e-8,
+    "grad_clip": 1.0,
+    "lr_scheduler": "cosine",
+    "warmup_steps": 400,
+
+    "precision": "fp16",
+    "use_8bit_optimizer": false,
+
+    "num_workers": 2,
+    "log_every": 10,
+    "save_every": 500,
+    "keep_last_n": 3
+  },
+
+  "sft": {
+    "data_path": null,
+    "output_dir": null,
+    "init_from": null,
+    "resume_from": null,
+    "auto_resume": true,
+
+    "max_seq_len": 1024,
+    "mask_prompt": false,
+
+    "micro_batch_size": 4,
+    "gradient_accumulation_steps": 8,
+    "num_epochs": 3,
+    "max_steps": -1,
+
+    "learning_rate": 2e-5,
+    "min_lr": 2e-6,
+    "weight_decay": 0.0,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "eps": 1e-8,
+    "grad_clip": 1.0,
+    "lr_scheduler": "cosine",
+    "warmup_ratio": 0.03,
+
+    "precision": "fp16",
+    "use_8bit_optimizer": false,
+
+    "num_workers": 2,
+    "log_every": 10,
+    "save_every": 500,
+    "keep_last_n": 3
+  }
+}

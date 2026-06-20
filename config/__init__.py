@@ -1,0 +1,1 @@
+"""Finantal-LM central configuration."""

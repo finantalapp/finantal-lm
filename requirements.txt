@@ -1,0 +1,15 @@
+# Finantal-LM — Colab T4 friendly.
+# On Colab, torch is preinstalled with the right CUDA build; do NOT reinstall it.
+#   pip install -r requirements.txt
+
+torch>=2.1.0          # preinstalled on Colab — listed for local/other envs
+numpy>=1.24
+sentencepiece>=0.1.99 # loads finantal_tokenizer.model
+tqdm>=4.65
+matplotlib>=3.7       # loss/perplexity plots in the notebooks
+
+# Optional — only if use_8bit_optimizer=true (lets ~1B-3B fit on a T4)
+bitsandbytes>=0.43.0 ; platform_system == "Linux"
+
+# Optional — only if you enable TensorBoard logging
+tensorboard>=2.14
