@@ -14,10 +14,10 @@
 
     "val_ratio": 0.05,
     "eval_every": 100,
-    "eval_max_batches": 50,
+    "eval_max_batches": 100,
 
-    "micro_batch_size": 8,
-    "gradient_accumulation_steps": 16,
+    "micro_batch_size": 16,
+    "gradient_accumulation_steps": 8,
     "num_epochs": 1,
     "max_steps": 8000,
     "_steps_note": "Corpus ~97M tokens; ~131K tokens/step at this config => ~740 steps/epoch. 8000 steps ~ 10 effective epochs.",
@@ -33,9 +33,9 @@
     "warmup_steps": 400,
 
     "precision": "fp16",
-    "use_8bit_optimizer": false,
+    "use_8bit_optimizer": true,
 
-    "num_workers": 2,
+    "num_workers": 4,
     "log_every": 10,
     "save_every": 100,
     "keep_last_n": 5,
@@ -57,9 +57,9 @@
 
     "val_ratio": 0.05,
     "eval_every": 100,
-    "eval_max_batches": 50,
+    "eval_max_batches": 100,
 
-    "micro_batch_size": 4,
+    "micro_batch_size": 8,
     "gradient_accumulation_steps": 8,
     "num_epochs": 3,
     "max_steps": -1,
@@ -75,9 +75,9 @@
     "warmup_ratio": 0.03,
 
     "precision": "fp16",
-    "use_8bit_optimizer": false,
+    "use_8bit_optimizer": true,
 
-    "num_workers": 2,
+    "num_workers": 4,
     "log_every": 10,
     "save_every": 100,
     "keep_last_n": 5
