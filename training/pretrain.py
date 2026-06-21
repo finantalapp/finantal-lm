@@ -134,7 +134,8 @@ def main():
                              num_workers=0, collate_fn=collate,
                              pin_memory=(device == "cuda"), drop_last=True)
                   if val_ds is not None else None)
-    logger.info(f"validation: {'enabled (~%.0f%% holdout)' % (val_ratio * 100) if val_loader else 'disabled'}")
+    val_status = ("enabled (~%.0f%% holdout)" % (val_ratio * 100)) if val_loader is not None else "disabled"
+    logger.info(f"validation: {val_status}")
 
     # ----- optimizer / amp -----
     accum = cfg["gradient_accumulation_steps"]
