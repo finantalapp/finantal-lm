@@ -148,10 +148,11 @@ def main():
         use_8bit=cfg.get("use_8bit_optimizer", False), logger=logger,
     )
     amp_dtype, use_scaler = resolve_amp(cfg["precision"])
-    scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
+    # GradScaler is ONLY needed for fp16; bf16 has fp32-like range so we drop it (None).
+    scaler = torch.cuda.amp.GradScaler() if use_scaler else None
     scheduler = CosineScheduler(optimizer, warmup_steps=warmup_steps, max_steps=max_steps,
                                 base_lr=cfg["learning_rate"], min_lr=cfg["min_lr"])
-    logger.info(f"precision={cfg['precision']} (amp_dtype={amp_dtype}, grad_scaler={use_scaler})")
+    logger.info(f"precision={cfg['precision']} (amp_dtype={amp_dtype}, grad_scaler={'on' if use_scaler else 'OFF (bf16)'})")
 
     # ----- resume (priority) else init_from pretrained weights -----
     start_step = 0
@@ -194,21 +195,28 @@ def main():
                 _, loss = model(input_ids, labels=labels)
                 loss = loss / accum
 
-            scaler.scale(loss).backward()
+            # fp16: scale the loss before backward; bf16/fp32: plain backward (no scaler)
+            (scaler.scale(loss) if use_scaler else loss).backward()
             running_loss += loss.item() * accum
             tokens_since += tokens_per_batch
             micro += 1
 
             if micro % accum == 0:
                 grad_norm = None
-                if cfg["grad_clip"] and cfg["grad_clip"] > 0:
+                # fp16 only: unscale grads back to true magnitude before clipping
+                if use_scaler:
                     scaler.unscale_(optimizer)
+                if cfg["grad_clip"] and cfg["grad_clip"] > 0:
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["grad_clip"]).item()
 
                 lr = scheduler.set_step(global_step)
 
-                scaler.step(optimizer)
-                scaler.update()
+                # fp16: scaler.step + update; bf16/fp32: a normal optimizer step
+                if use_scaler:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
                 global_step += 1
 
