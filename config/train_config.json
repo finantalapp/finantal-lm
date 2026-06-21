@@ -12,6 +12,10 @@
     "max_seq_len": 1024,
     "pack_sequences": true,
 
+    "val_ratio": 0.05,
+    "eval_every": 100,
+    "eval_max_batches": 50,
+
     "micro_batch_size": 8,
     "gradient_accumulation_steps": 16,
     "num_epochs": 1,
@@ -33,8 +37,9 @@
 
     "num_workers": 2,
     "log_every": 10,
-    "save_every": 500,
-    "keep_last_n": 3
+    "save_every": 100,
+    "keep_last_n": 5,
+    "_keep_note": "save_every=100 writes step_100.pt, step_200.pt, ... plus latest.pt. keep_last_n=5 keeps only the 5 newest step_*.pt to bound Drive usage (each ckpt ~ model+optimizer state). Set keep_last_n=0 to keep ALL checkpoints."
   },
 
   "sft": {
@@ -45,7 +50,14 @@
     "auto_resume": true,
 
     "max_seq_len": 1024,
-    "mask_prompt": false,
+
+    "mask_prompt": true,
+    "assistant_marker_ids": [11109, 32],
+    "_mask_note": "mask_prompt=true => loss is computed ONLY on the assistant answer. assistant_marker_ids = token IDs for '▁Assistant' + ':' (11109, 32). Everything up to and including this marker is set to -100. Verified against the actual data template: 'User: ... Assistant: ...'. The on-disk data is NOT changed.",
+
+    "val_ratio": 0.05,
+    "eval_every": 100,
+    "eval_max_batches": 50,
 
     "micro_batch_size": 4,
     "gradient_accumulation_steps": 8,
@@ -67,7 +79,7 @@
 
     "num_workers": 2,
     "log_every": 10,
-    "save_every": 500,
-    "keep_last_n": 3
+    "save_every": 100,
+    "keep_last_n": 5
   }
 }

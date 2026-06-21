@@ -68,6 +68,86 @@ def set_lr(optimizer, lr):
     return lr
 
 
+class CosineScheduler:
+    """
+    Cosine schedule with linear warmup, exposed as an object with a checkpointable
+    state (so optimizer/scheduler/scaler/step are all saved & restored together).
+
+    The LR is a pure function of the step, so resuming is exact: `set_step(g)` writes
+    the correct LR into the optimizer for global step `g`. state_dict() persists the
+    schedule parameters + last step.
+    """
+
+    def __init__(self, optimizer, *, warmup_steps, max_steps, base_lr, min_lr, last_step=-1):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.max_steps = max_steps
+        self.base_lr = base_lr
+        self.min_lr = min_lr
+        self.last_step = last_step
+        self.set_step(max(0, last_step))
+
+    def get_lr(self, step):
+        return cosine_lr(step, warmup_steps=self.warmup_steps, max_steps=self.max_steps,
+                         base_lr=self.base_lr, min_lr=self.min_lr)
+
+    def set_step(self, step):
+        """Set the optimizer LR for `step` and record it. Returns the LR."""
+        self.last_step = step
+        lr = self.get_lr(step)
+        for g in self.optimizer.param_groups:
+            g["lr"] = lr
+        return lr
+
+    def state_dict(self):
+        return {"warmup_steps": self.warmup_steps, "max_steps": self.max_steps,
+                "base_lr": self.base_lr, "min_lr": self.min_lr, "last_step": self.last_step}
+
+    def load_state_dict(self, sd):
+        self.warmup_steps = sd.get("warmup_steps", self.warmup_steps)
+        self.max_steps = sd.get("max_steps", self.max_steps)
+        self.base_lr = sd.get("base_lr", self.base_lr)
+        self.min_lr = sd.get("min_lr", self.min_lr)
+        self.last_step = sd.get("last_step", self.last_step)
+
+
+@torch.no_grad()
+def evaluate(model, val_loader, *, device, amp_dtype, max_batches=50, pad_token_id=0):
+    """
+    Token-weighted validation loss + perplexity over up to `max_batches` batches.
+    Returns (loss, perplexity) or (None, None) if there is no validation data.
+    Restores the model to train() mode on exit.
+    """
+    if val_loader is None:
+        return None, None
+    import math
+    was_training = model.training
+    model.eval()
+    total_loss, total_tokens = 0.0, 0
+    n = 0
+    for batch in val_loader:
+        input_ids = batch["input_ids"].to(device, non_blocking=True)
+        labels = batch["labels"].to(device, non_blocking=True)
+        labels = labels.masked_fill(input_ids == pad_token_id, -100)
+        with torch.autocast(device_type="cuda" if device == "cuda" else "cpu",
+                            dtype=amp_dtype, enabled=(amp_dtype != torch.float32)):
+            _, loss = model(input_ids, labels=labels)
+        # weight by the number of supervised target tokens in this batch
+        ntok = int((labels[:, 1:] != -100).sum().item())
+        if ntok > 0 and loss is not None:
+            total_loss += loss.item() * ntok
+            total_tokens += ntok
+        n += 1
+        if n >= max_batches:
+            break
+    if was_training:
+        model.train()
+    if total_tokens == 0:
+        return None, None
+    mean = total_loss / total_tokens
+    return mean, math.exp(min(mean, 20.0))
+
+
 # --------------------------------------------------------------------------- #
 # Precision helpers
 # --------------------------------------------------------------------------- #

@@ -2,8 +2,15 @@
 Supervised fine-tuning (SFT) entry point — from-scratch PyTorch training loop.
 
 Loads pretrained weights via `init_from` (defaults to the pretrain latest.pt on
-Drive), then fine-tunes on sft_tokenized.jsonl. Same paths/auto-resume/log-mirror
-behaviour as pretraining. Training logic is unchanged from the original.
+Drive), then fine-tunes on sft_tokenized.jsonl.
+
+Key behaviours:
+  * PROMPT MASKING: with mask_prompt=true, loss is computed ONLY on the assistant's
+    answer. Everything up to and including the "▁Assistant :" marker
+    (assistant_marker_ids) is set to -100. The on-disk data is never modified.
+  * 95/5 train/val split with periodic validation loss + perplexity.
+  * Checkpoints every `save_every` steps as step_<N>.pt + latest.pt, saving
+    model + optimizer + scheduler + scaler + step. Auto-resume on restart.
 
 Usage:
     python -m training.sft_train --config config/train_config.json
@@ -27,9 +34,10 @@ sys.path.insert(0, str(ROOT))
 
 from config import paths as P
 from models.model import FinantalForCausalLM, ModelConfig
-from data_pipeline.dataset_loader import JsonlExampleDataset
+from data_pipeline.dataset_loader import JsonlExampleDataset, train_val_split
 from data_pipeline.collator import CausalLMCollator, IGNORE_INDEX
-from training.common import build_optimizer, cosine_lr, set_lr, resolve_amp, count_params_human
+from training.common import (build_optimizer, resolve_amp, count_params_human,
+                             CosineScheduler, evaluate)
 from utils.seed import set_seed, seed_worker
 from utils.logging import TrainLogger
 from utils.checkpoint import save_checkpoint, load_checkpoint, load_weights_only
@@ -99,9 +107,41 @@ def main():
     model = FinantalForCausalLM(model_cfg).to(device)
     logger.info(f"model parameters: {count_params_human(model.num_parameters())}")
 
-    # ----- auto / explicit resume takes priority over init_from -----
-    resume_from = resolve_resume(cfg, output_dir, logger)
+    # ----- data (95/5 split) + prompt masking -----
+    assistant_marker = cfg.get("assistant_marker_ids") if cfg.get("mask_prompt", False) else None
+    if assistant_marker:
+        logger.info(f"prompt masking ON: loss only after marker {assistant_marker} (▁Assistant :)")
+    else:
+        logger.info("prompt masking OFF: loss on full sequence (labels as provided)")
 
+    full_ds = JsonlExampleDataset(data_path, max_seq_len=cfg["max_seq_len"], has_labels=True)
+    val_ratio = cfg.get("val_ratio", 0.0) or 0.0
+    train_ds, val_ds = train_val_split(full_ds, val_ratio, seed=full_cfg.get("seed", 1234))
+    collate = CausalLMCollator(pad_token_id=model_cfg.pad_token_id, max_seq_len=cfg["max_seq_len"],
+                               assistant_marker=assistant_marker)
+    loader = DataLoader(
+        train_ds, batch_size=cfg["micro_batch_size"], shuffle=True,
+        num_workers=cfg.get("num_workers", 2), collate_fn=collate,
+        pin_memory=(device == "cuda"), drop_last=True,
+        worker_init_fn=seed_worker, persistent_workers=cfg.get("num_workers", 2) > 0,
+    )
+    val_loader = (DataLoader(val_ds, batch_size=cfg["micro_batch_size"], shuffle=False,
+                             num_workers=0, collate_fn=collate,
+                             pin_memory=(device == "cuda"), drop_last=True)
+                  if val_ds is not None else None)
+
+    # ----- horizon / schedule -----
+    accum = cfg["gradient_accumulation_steps"]
+    steps_per_epoch = max(1, len(train_ds) // (cfg["micro_batch_size"] * accum))
+    if cfg.get("max_steps", -1) and cfg["max_steps"] > 0:
+        max_steps = cfg["max_steps"]
+    else:
+        max_steps = steps_per_epoch * cfg["num_epochs"]
+    warmup_steps = int(cfg.get("warmup_ratio", 0.03) * max_steps)
+    logger.info(f"train={len(train_ds):,} | val={len(val_ds) if val_ds else 0:,} | "
+                f"steps/epoch={steps_per_epoch} | max_steps={max_steps} | warmup={warmup_steps}")
+
+    # ----- optimizer / amp / scheduler -----
     optimizer = build_optimizer(
         model, lr=cfg["learning_rate"], weight_decay=cfg["weight_decay"],
         betas=(cfg["beta1"], cfg["beta2"]), eps=cfg["eps"],
@@ -109,12 +149,16 @@ def main():
     )
     amp_dtype, use_scaler = resolve_amp(cfg["precision"])
     scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
+    scheduler = CosineScheduler(optimizer, warmup_steps=warmup_steps, max_steps=max_steps,
+                                base_lr=cfg["learning_rate"], min_lr=cfg["min_lr"])
     logger.info(f"precision={cfg['precision']} (amp_dtype={amp_dtype}, grad_scaler={use_scaler})")
 
+    # ----- resume (priority) else init_from pretrained weights -----
     start_step = 0
+    resume_from = resolve_resume(cfg, output_dir, logger)
     if resume_from:
-        ckpt = load_checkpoint(resume_from, model=model, optimizer=optimizer, scaler=scaler,
-                               map_location=device)
+        ckpt = load_checkpoint(resume_from, model=model, optimizer=optimizer,
+                               scheduler=scheduler, scaler=scaler, map_location=device)
         start_step = ckpt.get("step", 0)
         logger.info(f"resumed SFT from {resume_from} at step {start_step}")
     elif init_from and os.path.exists(init_from):
@@ -124,26 +168,7 @@ def main():
     else:
         logger.info(f"WARNING: init_from='{init_from}' not found — SFT from random init.")
 
-    # ----- data -----
-    ds = JsonlExampleDataset(data_path, max_seq_len=cfg["max_seq_len"], has_labels=True)
-    collate = CausalLMCollator(pad_token_id=model_cfg.pad_token_id, max_seq_len=cfg["max_seq_len"])
-    loader = DataLoader(
-        ds, batch_size=cfg["micro_batch_size"], shuffle=True,
-        num_workers=cfg.get("num_workers", 2), collate_fn=collate,
-        pin_memory=(device == "cuda"), drop_last=True,
-        worker_init_fn=seed_worker, persistent_workers=cfg.get("num_workers", 2) > 0,
-    )
-
-    accum = cfg["gradient_accumulation_steps"]
-    steps_per_epoch = max(1, len(ds) // (cfg["micro_batch_size"] * accum))
-    if cfg.get("max_steps", -1) and cfg["max_steps"] > 0:
-        max_steps = cfg["max_steps"]
-    else:
-        max_steps = steps_per_epoch * cfg["num_epochs"]
-    warmup_steps = int(cfg.get("warmup_ratio", 0.03) * max_steps)
-    logger.info(f"examples={len(ds):,} | steps/epoch={steps_per_epoch} | "
-                f"max_steps={max_steps} | warmup_steps={warmup_steps}")
-
+    # ----- train loop -----
     model.train()
     optimizer.zero_grad(set_to_none=True)
     global_step = start_step
@@ -161,6 +186,7 @@ def main():
         for batch in loader:
             input_ids = batch["input_ids"].to(device, non_blocking=True)
             labels = batch["labels"].to(device, non_blocking=True)
+            # defensive: never supervise pad positions (prompt is already -100 from collator)
             labels = labels.masked_fill(input_ids == model_cfg.pad_token_id, IGNORE_INDEX)
 
             with torch.autocast(device_type="cuda" if device == "cuda" else "cpu",
@@ -179,9 +205,7 @@ def main():
                     scaler.unscale_(optimizer)
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["grad_clip"]).item()
 
-                lr = set_lr(optimizer, cosine_lr(
-                    global_step, warmup_steps=warmup_steps, max_steps=max_steps,
-                    base_lr=cfg["learning_rate"], min_lr=cfg["min_lr"]))
+                lr = scheduler.set_step(global_step)
 
                 scaler.step(optimizer)
                 scaler.update()
@@ -195,9 +219,17 @@ def main():
                                     grad_norm=grad_norm, tokens_per_sec=tps, extra={"epoch": epoch})
                     running_loss, tokens_since, t0 = 0.0, 0, time.time()
 
+                if val_loader is not None and global_step % cfg.get("eval_every", 100) == 0:
+                    vloss, vppl = evaluate(model, val_loader, device=device, amp_dtype=amp_dtype,
+                                           max_batches=cfg.get("eval_max_batches", 50),
+                                           pad_token_id=model_cfg.pad_token_id)
+                    if vloss is not None:
+                        logger.log_eval(global_step, vloss, vppl)
+                    t0 = time.time()
+
                 if global_step % cfg["save_every"] == 0:
                     path = save_checkpoint(output_dir, global_step, model=model,
-                                           optimizer=optimizer, scaler=scaler,
+                                           optimizer=optimizer, scheduler=scheduler, scaler=scaler,
                                            model_config=model_cfg.to_dict(),
                                            keep_last_n=cfg["keep_last_n"])
                     logger.info(f"saved checkpoint -> {path}")
@@ -207,7 +239,7 @@ def main():
                     break
 
     final = save_checkpoint(output_dir, global_step, model=model, optimizer=optimizer,
-                            scaler=scaler, model_config=model_cfg.to_dict(),
+                            scheduler=scheduler, scaler=scaler, model_config=model_cfg.to_dict(),
                             keep_last_n=cfg["keep_last_n"])
     logger.info(f"SFT complete at step {global_step}. final checkpoint -> {final}")
     logger.close()

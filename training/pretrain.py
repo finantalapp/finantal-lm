@@ -28,9 +28,11 @@ sys.path.insert(0, str(ROOT))
 
 from config import paths as P
 from models.model import FinantalForCausalLM, ModelConfig
-from data_pipeline.dataset_loader import PackedPretrainDataset, JsonlExampleDataset
+from data_pipeline.dataset_loader import (PackedPretrainDataset, JsonlExampleDataset,
+                                          train_val_split)
 from data_pipeline.collator import PackedCollator, CausalLMCollator
-from training.common import build_optimizer, cosine_lr, set_lr, resolve_amp, count_params_human
+from training.common import (build_optimizer, resolve_amp, count_params_human,
+                             CosineScheduler, evaluate)
 from utils.seed import set_seed, seed_worker
 from utils.logging import TrainLogger
 from utils.checkpoint import save_checkpoint, load_checkpoint
@@ -103,23 +105,36 @@ def main():
     logger.info(f"model parameters: {count_params_human(model.num_parameters())} "
                 f"({model.num_parameters():,})")
 
-    # ----- data -----
+    # ----- data (95/5 train/val split) -----
+    val_ratio = cfg.get("val_ratio", 0.0) or 0.0
     if cfg.get("pack_sequences", True):
-        ds = PackedPretrainDataset(data_path, block_size=cfg["max_seq_len"],
-                                   eos_token_id=model_cfg.eos_token_id)
+        train_ds = PackedPretrainDataset(data_path, block_size=cfg["max_seq_len"],
+                                         eos_token_id=model_cfg.eos_token_id,
+                                         split=("train" if val_ratio > 0 else "all"),
+                                         val_ratio=val_ratio)
+        val_ds = (PackedPretrainDataset(data_path, block_size=cfg["max_seq_len"],
+                                        eos_token_id=model_cfg.eos_token_id,
+                                        split="val", val_ratio=val_ratio)
+                  if val_ratio > 0 else None)
         collate = PackedCollator()
         shuffle = False
     else:
-        ds = JsonlExampleDataset(data_path, max_seq_len=cfg["max_seq_len"], has_labels=False)
+        full = JsonlExampleDataset(data_path, max_seq_len=cfg["max_seq_len"], has_labels=False)
+        train_ds, val_ds = train_val_split(full, val_ratio, seed=full_cfg.get("seed", 1234))
         collate = CausalLMCollator(pad_token_id=model_cfg.pad_token_id, max_seq_len=cfg["max_seq_len"])
         shuffle = True
 
     loader = DataLoader(
-        ds, batch_size=cfg["micro_batch_size"], shuffle=shuffle,
+        train_ds, batch_size=cfg["micro_batch_size"], shuffle=shuffle,
         num_workers=cfg.get("num_workers", 2), collate_fn=collate,
         pin_memory=(device == "cuda"), drop_last=True,
         worker_init_fn=seed_worker, persistent_workers=cfg.get("num_workers", 2) > 0,
     )
+    val_loader = (DataLoader(val_ds, batch_size=cfg["micro_batch_size"], shuffle=False,
+                             num_workers=0, collate_fn=collate,
+                             pin_memory=(device == "cuda"), drop_last=True)
+                  if val_ds is not None else None)
+    logger.info(f"validation: {'enabled (~%.0f%% holdout)' % (val_ratio * 100) if val_loader else 'disabled'}")
 
     # ----- optimizer / amp -----
     accum = cfg["gradient_accumulation_steps"]
@@ -131,14 +146,16 @@ def main():
     )
     amp_dtype, use_scaler = resolve_amp(cfg["precision"])
     scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
+    scheduler = CosineScheduler(optimizer, warmup_steps=cfg["warmup_steps"], max_steps=max_steps,
+                                base_lr=cfg["learning_rate"], min_lr=cfg["min_lr"])
     logger.info(f"precision={cfg['precision']} (amp_dtype={amp_dtype}, grad_scaler={use_scaler})")
 
-    # ----- auto / explicit resume -----
+    # ----- auto / explicit resume (restores model + optimizer + scheduler + scaler + step) -----
     start_step = 0
     resume_from = resolve_resume(cfg, output_dir, logger)
     if resume_from:
-        ckpt = load_checkpoint(resume_from, model=model, optimizer=optimizer, scaler=scaler,
-                               map_location=device)
+        ckpt = load_checkpoint(resume_from, model=model, optimizer=optimizer,
+                               scheduler=scheduler, scaler=scaler, map_location=device)
         start_step = ckpt.get("step", 0)
         logger.info(f"resumed from {resume_from} at step {start_step}")
 
@@ -178,9 +195,7 @@ def main():
                     scaler.unscale_(optimizer)
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg["grad_clip"]).item()
 
-                lr = set_lr(optimizer, cosine_lr(
-                    global_step, warmup_steps=cfg["warmup_steps"], max_steps=max_steps,
-                    base_lr=cfg["learning_rate"], min_lr=cfg["min_lr"]))
+                lr = scheduler.set_step(global_step)
 
                 scaler.step(optimizer)
                 scaler.update()
@@ -194,9 +209,17 @@ def main():
                                     grad_norm=grad_norm, tokens_per_sec=tps)
                     running_loss, tokens_since, t0 = 0.0, 0, time.time()
 
+                if val_loader is not None and global_step % cfg.get("eval_every", 100) == 0:
+                    vloss, vppl = evaluate(model, val_loader, device=device, amp_dtype=amp_dtype,
+                                           max_batches=cfg.get("eval_max_batches", 50),
+                                           pad_token_id=model_cfg.pad_token_id)
+                    if vloss is not None:
+                        logger.log_eval(global_step, vloss, vppl)
+                    t0 = time.time()  # don't count eval time against tok/s
+
                 if global_step % cfg["save_every"] == 0:
                     path = save_checkpoint(output_dir, global_step, model=model,
-                                           optimizer=optimizer, scaler=scaler,
+                                           optimizer=optimizer, scheduler=scheduler, scaler=scaler,
                                            model_config=model_cfg.to_dict(),
                                            keep_last_n=cfg["keep_last_n"])
                     logger.info(f"saved checkpoint -> {path}")
@@ -206,7 +229,7 @@ def main():
                     break
 
     final = save_checkpoint(output_dir, global_step, model=model, optimizer=optimizer,
-                            scaler=scaler, model_config=model_cfg.to_dict(),
+                            scheduler=scheduler, scaler=scaler, model_config=model_cfg.to_dict(),
                             keep_last_n=cfg["keep_last_n"])
     logger.info(f"pretraining complete at step {global_step}. final checkpoint -> {final}")
     logger.close()

@@ -90,6 +90,24 @@ class TrainLogger:
         gn = f" | gnorm {grad_norm:.3f}" if grad_norm is not None else ""
         self.info(f"step {step:>7} | loss {loss:.4f} | ppl {ppl:8.2f} | lr {lr:.2e}{gn}{tps}")
 
+    def log_eval(self, step: int, val_loss: float, val_ppl: float) -> None:
+        record = {"step": step, "val_loss": round(val_loss, 5),
+                  "val_perplexity": round(val_ppl, 3),
+                  "elapsed_s": round(time.time() - self.start_time, 1)}
+        line = json.dumps(record) + "\n"
+        self._metrics_fh.write(line)
+        self._metrics_fh.flush()
+        if self._mirror_fh is not None:
+            try:
+                self._mirror_fh.write(line)
+                self._mirror_fh.flush()
+            except OSError:
+                pass
+        if self.tb is not None:
+            self.tb.add_scalar("val/loss", val_loss, step)
+            self.tb.add_scalar("val/perplexity", val_ppl, step)
+        self.info(f"  [eval] step {step:>7} | val_loss {val_loss:.4f} | val_ppl {val_ppl:8.2f}")
+
     def close(self) -> None:
         for fh in (self._metrics_fh, self._text_fh, self._mirror_fh):
             try:

@@ -20,7 +20,20 @@ import json
 import os
 import numpy as np
 import torch
-from torch.utils.data import Dataset, IterableDataset, get_worker_info
+from torch.utils.data import Dataset, IterableDataset, Subset, get_worker_info
+
+
+def train_val_split(dataset, val_ratio: float = 0.05, seed: int = 1234):
+    """Deterministically split a map-style dataset into (train, val) Subsets (95/5)."""
+    n = len(dataset)
+    if val_ratio <= 0 or n < 2:
+        return dataset, None
+    rng = np.random.RandomState(seed)
+    perm = rng.permutation(n)
+    n_val = max(1, int(round(n * val_ratio)))
+    val_idx = perm[:n_val].tolist()
+    train_idx = perm[n_val:].tolist()
+    return Subset(dataset, train_idx), Subset(dataset, val_idx)
 
 
 # --------------------------------------------------------------------------- #
@@ -99,11 +112,22 @@ class PackedPretrainDataset(IterableDataset):
     """
 
     def __init__(self, path: str, block_size: int = 1024, eos_token_id: int = 3,
-                 add_eos: bool = True):
+                 add_eos: bool = True, split: str = "all", val_ratio: float = 0.0):
         self.path = path
         self.block_size = block_size
         self.eos_token_id = eos_token_id
         self.add_eos = add_eos
+        # split: 'all' | 'train' | 'val'. Holdout is deterministic by line index:
+        # every `val_period`-th line is validation (val_period = round(1/val_ratio)).
+        assert split in ("all", "train", "val")
+        self.split = split
+        self.val_period = int(round(1.0 / val_ratio)) if (val_ratio and val_ratio > 0) else 0
+
+    def _in_split(self, line_no: int) -> bool:
+        if self.split == "all" or self.val_period <= 1:
+            return True
+        is_val = (line_no % self.val_period == 0)
+        return is_val if self.split == "val" else (not is_val)
 
     def __iter__(self):
         worker = get_worker_info()
@@ -115,6 +139,8 @@ class PackedPretrainDataset(IterableDataset):
             for line_no, line in enumerate(f):
                 if line_no % num_workers != worker_id:
                     continue  # shard by line across workers
+                if not self._in_split(line_no):
+                    continue  # train/val holdout
                 line = line.strip()
                 if not line:
                     continue

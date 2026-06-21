@@ -36,7 +36,7 @@ def save_checkpoint(output_dir: str, step: int, *, model, optimizer=None, schedu
     if extra:
         payload["extra"] = extra
 
-    ckpt_path = os.path.join(output_dir, f"checkpoint_step{step}.pt")
+    ckpt_path = os.path.join(output_dir, f"step_{step}.pt")
     tmp_path = ckpt_path + ".tmp"
     torch.save(payload, tmp_path)
     os.replace(tmp_path, ckpt_path)  # atomic
@@ -51,10 +51,10 @@ def save_checkpoint(output_dir: str, step: int, *, model, optimizer=None, schedu
 def _prune(output_dir: str, keep_last_n: int) -> None:
     if keep_last_n is None or keep_last_n <= 0:
         return
-    ckpts = glob.glob(os.path.join(output_dir, "checkpoint_step*.pt"))
+    ckpts = glob.glob(os.path.join(output_dir, "step_*.pt"))
 
     def step_of(p):
-        m = re.search(r"checkpoint_step(\d+)\.pt$", os.path.basename(p))
+        m = re.search(r"step_(\d+)\.pt$", os.path.basename(p))
         return int(m.group(1)) if m else -1
 
     ckpts.sort(key=step_of)
