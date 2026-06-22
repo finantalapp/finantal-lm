@@ -22,7 +22,7 @@ CELLS.append(md(
 "\n"
 "- Cell 4 **inspects** your `.pt` file and prints exactly what it contains (no assumptions).\n"
 "- The model architecture is rebuilt automatically from the `model_config` stored inside the checkpoint.\n"
-"- Switch between `latest.pt` / `step_2700.pt` live from the UI.\n"
+"- Switch between `latest.pt` / `step_3700.pt` live from the UI.\n"
 ))
 
 # ── 1. install ──
