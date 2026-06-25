@@ -43,7 +43,7 @@ print(f"loaded {LATEST} | step={ck.get('step')} | params={model.num_parameters()
 @torch.no_grad()
 def generate(prompt: str, max_new_tokens: int = 160,
              temperature: float = 0.2, top_p: float = 0.9,
-             repetition_penalty: float = 1.3) -> str:
+             repetition_penalty: float = 1.3, do_sample: bool = True) -> str:
     # IMPORTANT: do NOT prepend BOS. The SFT data (sft_tokenized_v2.jsonl) starts
     # every example with '▁User' (id 26054), never with BOS(2). Prepending BOS
     # here would be a train/inference mismatch and corrupts the first-token
@@ -63,16 +63,18 @@ def generate(prompt: str, max_new_tokens: int = 160,
                 else:
                     logits[0, tok_id] /= repetition_penalty
 
-        logits = logits / max(float(temperature), 1e-5)
-
-        if top_p and top_p < 1.0:
-            s_logits, s_idx = torch.sort(logits, descending=True)
-            cum = torch.cumsum(F.softmax(s_logits, dim=-1), dim=-1)
-            rm = cum > top_p
-            rm[..., 1:] = rm[..., :-1].clone(); rm[..., 0] = False
-            logits = logits.masked_fill(rm.scatter(1, s_idx, rm), float("-inf"))
-
-        nxt = torch.multinomial(F.softmax(logits, dim=-1), num_samples=1)
+        if not do_sample:
+            # greedy: most-confident token, fully deterministic (no randomness)
+            nxt = logits.argmax(dim=-1, keepdim=True)
+        else:
+            logits = logits / max(float(temperature), 1e-5)
+            if top_p and top_p < 1.0:
+                s_logits, s_idx = torch.sort(logits, descending=True)
+                cum = torch.cumsum(F.softmax(s_logits, dim=-1), dim=-1)
+                rm = cum > top_p
+                rm[..., 1:] = rm[..., :-1].clone(); rm[..., 0] = False
+                logits = logits.masked_fill(rm.scatter(1, s_idx, rm), float("-inf"))
+            nxt = torch.multinomial(F.softmax(logits, dim=-1), num_samples=1)
         tok = int(nxt.item())
         x = torch.cat([x, nxt], dim=1)
         if tok == cfg.eos_token_id:
@@ -92,11 +94,12 @@ def generate(prompt: str, max_new_tokens: int = 160,
 # Each message is sent as a fully self-contained SFT-template prompt.
 def respond(message: str, history,          # history arg kept for Gradio API compat
             max_new_tokens: int, temperature: float,
-            top_p: float, repetition_penalty: float) -> str:
+            top_p: float, repetition_penalty: float, do_sample: bool) -> str:
     # Exact SFT training template: "User: <question> Assistant:"
     # (space before Assistant — matches what the tokenizer saw during training)
     prompt = f"User: {message.strip()} Assistant:"
-    return generate(prompt, max_new_tokens, temperature, top_p, repetition_penalty)
+    return generate(prompt, max_new_tokens, temperature, top_p, repetition_penalty,
+                    do_sample=do_sample)
 
 
 demo = gr.ChatInterface(
@@ -116,6 +119,8 @@ demo = gr.ChatInterface(
                   label="top_p"),
         gr.Slider(1.0, 2.0, value=1.3, step=0.05,
                   label="repetition_penalty"),
+        gr.Checkbox(value=True,
+                    label="do_sample — أزِل الصح ثم اضغط 🔄 Retry لإعادة التوليد greedy (حرارة 0)"),
     ],
     additional_inputs_accordion=gr.Accordion("⚙️ إعدادات التوليد", open=False),
 )
