@@ -16,6 +16,60 @@ import shutil
 
 import torch
 
+# --------------------------------------------------------------------------- #
+# Permanent deletion (Google Drive trash fix)
+# --------------------------------------------------------------------------- #
+# On Colab, `os.remove` on a file under /content/drive moves it to Drive Trash,
+# which KEEPS consuming quota -> Drive fills up -> checkpoint saving breaks.
+# When FINANTAL_DRIVE_PURGE != "0", we additionally delete the trashed copy
+# permanently via the Drive API (best-effort; silently falls back off-Colab).
+_PURGE = os.environ.get("FINANTAL_DRIVE_PURGE", "1") not in ("0", "false", "False")
+_DRIVE_SVC = None  # cached Drive API client (None=untried, False=unavailable)
+
+
+def _drive_service():
+    global _DRIVE_SVC
+    if _DRIVE_SVC is not None:
+        return _DRIVE_SVC
+    try:
+        from google.colab import auth          # only present on Colab
+        auth.authenticate_user()
+        from googleapiclient.discovery import build
+        _DRIVE_SVC = build("drive", "v3", cache_discovery=False)
+    except Exception:
+        _DRIVE_SVC = False
+    return _DRIVE_SVC
+
+
+def _permanent_delete(path: str) -> None:
+    """Remove a checkpoint file and, on Colab, purge its trashed copy permanently."""
+    name = os.path.basename(path)
+    # Truncate to 0 bytes BEFORE deleting: even if the Drive API purge below is
+    # unavailable (no auth / off-Colab), the copy that lands in Drive Trash is
+    # empty and consumes ~no quota.
+    try:
+        with open(path, "wb"):
+            pass
+    except OSError:
+        pass
+    try:
+        os.remove(path)                          # removes from the working tree (-> Drive trash)
+    except OSError:
+        pass
+    if not _PURGE:
+        return
+    svc = _drive_service()
+    if not svc:
+        return
+    try:                                          # find the just-trashed file by name and hard-delete
+        q = f"name = '{name}' and trashed = true"
+        res = svc.files().list(q=q, spaces="drive",
+                               fields="files(id,name)", pageSize=20).execute()
+        for f in res.get("files", []):
+            svc.files().delete(fileId=f["id"]).execute()   # permanent (skips trash)
+    except Exception:
+        pass
+
 
 def save_checkpoint(output_dir: str, step: int, *, model, optimizer=None, scheduler=None,
                     scaler=None, model_config: dict | None = None, extra: dict | None = None,
@@ -49,6 +103,8 @@ def save_checkpoint(output_dir: str, step: int, *, model, optimizer=None, schedu
 
 
 def _prune(output_dir: str, keep_last_n: int) -> None:
+    """Keep only the newest `keep_last_n` step_*.pt files (latest.pt is never touched).
+    Older ones are permanently deleted (Drive-trash-safe)."""
     if keep_last_n is None or keep_last_n <= 0:
         return
     ckpts = glob.glob(os.path.join(output_dir, "step_*.pt"))
@@ -58,11 +114,8 @@ def _prune(output_dir: str, keep_last_n: int) -> None:
         return int(m.group(1)) if m else -1
 
     ckpts.sort(key=step_of)
-    for p in ckpts[:-keep_last_n]:
-        try:
-            os.remove(p)
-        except OSError:
-            pass
+    for p in ckpts[:-keep_last_n]:        # everything except the newest keep_last_n
+        _permanent_delete(p)
 
 
 def load_checkpoint(path: str, *, model=None, optimizer=None, scheduler=None,

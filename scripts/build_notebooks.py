@@ -87,7 +87,7 @@ def setup_nb():
            "**Expected Drive layout** (`MyDrive/finantal_data/`):\n"
            "```\n"
            "finantal_data/\n"
-           "├── data/        pretrain_tokenized.jsonl, sft_tokenized.jsonl\n"
+           "├── data/        pretrain_tokenized.jsonl, sft_tokenized_v2.jsonl\n"
            "├── tokenizer/   finantal_tokenizer.model, .vocab\n"
            "└── checkpoints/ pretrain/, sft/\n"
            "```\n"),

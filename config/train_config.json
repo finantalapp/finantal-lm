@@ -80,6 +80,6 @@
     "num_workers": 4,
     "log_every": 10,
     "save_every": 100,
-    "keep_last_n": 5
+    "keep_last_n": 3
   }
 }

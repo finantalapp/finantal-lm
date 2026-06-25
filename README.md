@@ -20,7 +20,7 @@ Heavy assets are **never** committed (see `.gitignore`). They live on Drive:
 
 ```
 MyDrive/finantal_data/            ← Google Drive (data + weights)
-├── data/         pretrain_tokenized.jsonl · sft_tokenized.jsonl · dataset_stats.json
+├── data/         pretrain_tokenized.jsonl · sft_tokenized_v2.jsonl · dataset_stats.json
 ├── tokenizer/    finantal_tokenizer.model · finantal_tokenizer.vocab
 └── checkpoints/  pretrain/ · sft/      (written here during training)
 ```

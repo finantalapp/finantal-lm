@@ -2,7 +2,7 @@
 Supervised fine-tuning (SFT) entry point — from-scratch PyTorch training loop.
 
 Loads pretrained weights via `init_from` (defaults to the pretrain latest.pt on
-Drive), then fine-tunes on sft_tokenized.jsonl.
+Drive), then fine-tunes on sft_tokenized_v2.jsonl.
 
 Key behaviours:
   * PROMPT MASKING: with mask_prompt=true, loss is computed ONLY on the assistant's

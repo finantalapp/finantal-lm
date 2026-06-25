@@ -46,14 +46,20 @@ DRIVE_LOG_DIR = os.environ.get("DRIVE_LOG_DIR", os.path.join(DATA_ROOT, "logs"))
 # Concrete files / sub-dirs
 # --------------------------------------------------------------------------- #
 PRETRAIN_DATA = os.environ.get("PRETRAIN_DATA", os.path.join(DATA_DIR, "pretrain_tokenized.jsonl"))
-SFT_DATA = os.environ.get("SFT_DATA", os.path.join(DATA_DIR, "sft_tokenized.jsonl"))
+SFT_DATA = os.environ.get("SFT_DATA", os.path.join(DATA_DIR, "sft_tokenized_v2.jsonl"))
 DATASET_STATS = os.path.join(DATA_DIR, "dataset_stats.json")
 
 TOKENIZER_MODEL = os.environ.get("TOKENIZER_MODEL", os.path.join(TOKENIZER_DIR, "finantal_tokenizer.model"))
 TOKENIZER_VOCAB = os.path.join(TOKENIZER_DIR, "finantal_tokenizer.vocab")
 
 PRETRAIN_CKPT_DIR = os.path.join(CHECKPOINT_DIR, "pretrain")
-SFT_CKPT_DIR = os.path.join(CHECKPOINT_DIR, "sft")
+# New SFT runs (v2 clean data) write to an ISOLATED dir so they:
+#   (1) never auto-resume the OLD sft/ checkpoints,
+#   (2) never collide with the old step numbering (old step_3900 vs new step_100),
+#   (3) leave the old checkpoints/sft/ completely untouched.
+# Override with env SFT_CKPT_DIR to point elsewhere. Old SFT kept at <CHECKPOINT_DIR>/sft.
+SFT_CKPT_DIR = os.environ.get("SFT_CKPT_DIR", os.path.join(CHECKPOINT_DIR, "sft_v2"))
+OLD_SFT_CKPT_DIR = os.path.join(CHECKPOINT_DIR, "sft")  # legacy — NOT a training start point
 PRETRAIN_LATEST = os.path.join(PRETRAIN_CKPT_DIR, "latest.pt")
 SFT_LATEST = os.path.join(SFT_CKPT_DIR, "latest.pt")
 

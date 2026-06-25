@@ -59,7 +59,7 @@ flowchart TD
     B --> C["Tokenizer Training<br/>SentencePiece Unigram, 32k<br/><i>(script not in repo)</i>"]
     C --> D["Tokenization Pipeline<br/><i>(script not in repo)</i>"]
     D --> E["pretrain_tokenized.jsonl<br/>140,214 docs · 97.1M tokens"]
-    D --> F["sft_tokenized.jsonl<br/>88,582 examples · 9.05M tokens"]
+    D --> F["sft_tokenized_v2.jsonl<br/>88,582 examples · 9.05M tokens"]
     E --> G["Pretraining<br/>training/pretrain.py"]
     F --> H["SFT<br/>training/sft_train.py"]
     G --> I["checkpoints/pretrain/<br/>latest.pt"]
@@ -137,7 +137,7 @@ flowchart LR
 | Split | File | Examples | Total tokens | Avg len | Min | Max | Has `labels` |
 |---|---|---:|---:|---:|---:|---:|:--:|
 | Pretrain | `data/pretrain_tokenized.jsonl` | **140,214** | **97,100,187** | 692.51 | 109 | 2048 | ✅ |
-| SFT | `data/sft_tokenized.jsonl` | **88,582** | **9,050,243** | 102.17 | 20 | 2048 | ✅ |
+| SFT | `data/sft_tokenized_v2.jsonl` | **88,582** | **9,050,243** | 102.17 | 20 | 2048 | ✅ |
 
 *(Source: `data/dataset_stats.json`, regenerated via `scripts/build_dataset_stats.py`.)*
 
@@ -191,7 +191,7 @@ flowchart TD
         P4 --> P5["model(input_ids, labels)"]
     end
     subgraph SFTP["SFT path"]
-        S1["sft_tokenized.jsonl"] --> S2["build_offset_index<br/>(.offsets.npy cache)"]
+        S1["sft_tokenized_v2.jsonl"] --> S2["build_offset_index<br/>(.offsets.npy cache)"]
         S2 --> S3["JsonlExampleDataset<br/>seek line -> {input_ids,labels}"]
         S3 --> S4["CausalLMCollator<br/>right-pad, pad-labels=-100"]
         S4 --> S5["mask pad positions -> -100"]
@@ -536,7 +536,7 @@ this then launch training, plot loss, and run a generation sanity check.
 ### 11.2 Stage 2 — SFT (`training/sft_train.py`)
 
 - **Init:** weights loaded from `checkpoints/pretrain/latest.pt` (fresh optimizer).
-- **Data:** `sft_tokenized.jsonl` (88,582 examples, avg 102 tokens). Examples appear to encode an instruction→response structure (role-marker tokens visible in the IDs).
+- **Data:** `sft_tokenized_v2.jsonl` (88,582 examples, avg 102 tokens). Examples appear to encode an instruction→response structure (role-marker tokens visible in the IDs).
 - **Objective:** next-token prediction over each example; LR lowered to 2e-5, weight decay 0, 3 epochs.
 - **What the model learns:** to follow the instruction/response **format** and produce task-style completions.
 
@@ -632,7 +632,7 @@ finantal-lm/                         # GitHub repo — CODE ONLY (no data/weight
 MyDrive/finantal_data/               # Google Drive — DATA + WEIGHTS (never in Git)
 ├── data/
 │   ├── pretrain_tokenized.jsonl     # 140,214 docs · 97.1M tokens
-│   ├── sft_tokenized.jsonl          # 88,582 examples · 9.05M tokens
+│   ├── sft_tokenized_v2.jsonl          # 88,582 examples · 9.05M tokens
 │   └── dataset_stats.json           # measured statistics
 ├── tokenizer/
 │   ├── finantal_tokenizer.model     # SentencePiece Unigram, 32k
