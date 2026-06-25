@@ -41,12 +41,14 @@ print(f"loaded {LATEST} | step={ck.get('step')} | params={model.num_parameters()
 
 # ── generation: tokenize -> generate -> decode (new text only) ────────────────
 @torch.no_grad()
-def generate(prompt: str, max_new_tokens: int = 200,
-             temperature: float = 0.8, top_p: float = 0.9,
+def generate(prompt: str, max_new_tokens: int = 160,
+             temperature: float = 0.2, top_p: float = 0.9,
              repetition_penalty: float = 1.3) -> str:
+    # IMPORTANT: do NOT prepend BOS. The SFT data (sft_tokenized_v2.jsonl) starts
+    # every example with '▁User' (id 26054), never with BOS(2). Prepending BOS
+    # here would be a train/inference mismatch and corrupts the first-token
+    # distribution -> off-topic / hallucinated answers.
     ids = SP.encode(prompt, out_type=int)
-    if SP.bos_id() >= 0:
-        ids = [SP.bos_id()] + ids
     x = torch.tensor([ids], dtype=torch.long, device=DEVICE)
     new: list[int] = []
     for _ in range(int(max_new_tokens)):
@@ -106,10 +108,10 @@ demo = gr.ChatInterface(
         "النموذج لا يرى المحادثة السابقة — فقط سؤالك الحالي."
     ),
     additional_inputs=[
-        gr.Slider(16, 512, value=200, step=8,
+        gr.Slider(16, 512, value=160, step=8,
                   label="max_new_tokens"),
-        gr.Slider(0.1, 2.0, value=0.8, step=0.05,
-                  label="temperature"),
+        gr.Slider(0.1, 1.5, value=0.2, step=0.05,
+                  label="temperature (low = focused, less hallucination)"),
         gr.Slider(0.1, 1.0, value=0.9, step=0.05,
                   label="top_p"),
         gr.Slider(1.0, 2.0, value=1.3, step=0.05,
